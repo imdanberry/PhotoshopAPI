@@ -49,6 +49,7 @@ struct GroupLayer final: public Layer<T>
 		Layer<T>::m_LayerName = parameters.name;
 		Layer<T>::m_BlendMode = parameters.blendmode;
 		Layer<T>::m_Opacity = parameters.opacity;
+		Layer<T>::m_Fill = parameters.fill;
 		Layer<T>::m_IsVisible = parameters.visible;
 		Layer<T>::m_IsLocked = parameters.locked;
 		Layer<T>::m_CenterX = static_cast<float>(parameters.center_x);

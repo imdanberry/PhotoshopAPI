@@ -54,9 +54,13 @@ struct Layer : public MaskMixin<T>
 		uint32_t width = 0u;
 		/// The height of the layer, this value must be passed explicitly as we do not deduce this from the Image Data itself
 		uint32_t height = 0u;
-		/// The Layer opacity, the value displayed by Photoshop will be this value / 255 so 255 corresponds to 100% 
+		/// The Layer opacity, the value displayed by Photoshop will be this value / 255 so 255 corresponds to 100%
 		/// while 128 would correspond to ~50%
 		uint8_t opacity = 255u;
+		/// The Layer Fill (the secondary opacity slider Photoshop exposes under Opacity). Same 0-255 scale,
+		/// 255 = 100% (the default). Set this if you want to construct a layer with a non-default Fill;
+		/// otherwise the value Photoshop would render is the 100% default.
+		uint8_t fill = 255u;
 		/// The compression codec of the layer, it is perfectly valid for each layer (and channel) to be compressed differently
 		Enum::Compression compression = Enum::Compression::ZipPrediction; 
 		/// The Layers color mode
@@ -348,10 +352,12 @@ struct Layer : public MaskMixin<T>
 				m_LayerName = unicode_name->m_Name.string();
 			}
 
-			if (auto blend_fill = additional_layer_info.get_tagged_block<BlendFillTaggedBlock>())
-			{
-				m_Fill = blend_fill->m_Fill;
-			}
+			// Photoshop omits the `iOpa` block when Fill is at 100%, so an absent block
+			// must mean Fill = 255. Setting the fallback explicitly here decouples
+			// correctness from the m_Fill member initializer's value — a future refactor
+			// can't silently break the read path by changing the initializer.
+			auto blend_fill = additional_layer_info.get_tagged_block<BlendFillTaggedBlock>();
+			m_Fill = blend_fill ? blend_fill->m_Fill : 255u;
 		}
 	}
 
@@ -420,8 +426,11 @@ protected:
 
 	/// 0 - 255 despite the appearance being 0-100 in photoshop
 	uint8_t m_Opacity{};
-	/// 0 - 255 despite the appearance being 0-100 in photoshop
-	uint8_t m_Fill{};
+	/// 0 - 255 despite the appearance being 0-100 in photoshop. Defaults to 255 (100% Fill)
+	/// because Photoshop omits the `iOpa` additional layer info block when Fill is at 100%
+	/// (the common case), so a layer loaded from a Photoshop-saved PSD without an `iOpa`
+	/// block must enter the in-memory tree at Fill = 255, not 0.
+	uint8_t m_Fill = 255u;
 
 	uint32_t m_Width{};
 
@@ -504,8 +513,14 @@ protected:
 		const auto sheet_color_tagged_block = std::make_shared<SheetColorTaggedBlock>(m_LayerColor);
 		block_vec.push_back(sheet_color_tagged_block);
 
-		const auto blend_fill_tagged_block = std::make_shared<BlendFillTaggedBlock>(m_Fill);
-		block_vec.push_back(blend_fill_tagged_block);
+		// Match Photoshop's omit-at-100% write convention: don't emit `iOpa` when Fill
+		// is at default, so round-tripped output is spec-faithful and free of redundant
+		// Fill=255 blocks on every layer.
+		if (m_Fill != 255u)
+		{
+			const auto blend_fill_tagged_block = std::make_shared<BlendFillTaggedBlock>(m_Fill);
+			block_vec.push_back(blend_fill_tagged_block);
+		}
 
 		return block_vec;
 	}
