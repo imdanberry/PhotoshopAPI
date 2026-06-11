@@ -73,7 +73,17 @@ LayerRecords::BitFlags::BitFlags(const bool isTransparencyProtected, const bool 
 {
 	m_isTransparencyProtected = isTransparencyProtected;
 	m_isHidden = isHidden;
-	// TODO this approach of simplifying is probably fine but we need to test if it actually defaults to false or not
+	// Bit 3 ("Photoshop 5.0+ file" marker) is unconditional for any file PA writes —
+	// PA is by definition 5.0+ and Photoshop's parser uses this bit to gate type-layer
+	// restoration: without it, layers carrying a TySh descriptor come back as plain
+	// raster (verified empirically with a byte-level bisection — restoring this single
+	// bit byte-by-byte over a PA round-trip is sufficient to restore live editable
+	// type layers in Photoshop). The pre-fix default of `false` was unverified — see
+	// the `TODO` comment that previously occupied this slot. The better long-term
+	// shape is verbatim flag-byte round-trip (preserve bits 2 and 5-7 too, plus bit 4
+	// on layers like SoCo where the source set both 3 and 4 = 0x18), but that requires
+	// capturing the original byte on read and replaying it on write across every layer
+	// subtype's `to_photoshop()` call site — a much bigger diff. Logged as follow-up.
 	if (isPixelDataIrrelevant)
 	{
 		m_isBit4Useful = true;
@@ -81,7 +91,7 @@ LayerRecords::BitFlags::BitFlags(const bool isTransparencyProtected, const bool 
 	}
 	else
 	{
-		m_isBit4Useful = false;
+		m_isBit4Useful = true;
 		m_isPixelDataIrrelevant = false;
 	}
 }

@@ -84,6 +84,17 @@ struct TextLayer :
 	TextLayer(const LayerRecord& layerRecord, ChannelImageData& channelImageData, const FileHeader& header)
 		: Layer<T>(layerRecord, channelImageData, header)
 	{
+		// Retain the layer's non-mask raster channels in m_UnparsedImageData so the
+		// writer re-emits them on save. Without this, text layers loaded from a
+		// Photoshop-saved PSD lose their baked raster channels through a write
+		// round-trip — `Layer<T>`'s base ctor extracts only the mask channel, so
+		// non-mask channel pointers would otherwise stay parked in
+		// `channelImageData` and be discarded. ImageLayer's constructor does the
+		// same loop inline (ImageLayer.h:125-139). This call uses the existing
+		// `generate_channel_image_data_from_read` helper, which already implements
+		// the move semantics + already-released-pointer guard. Fixes upstream
+		// https://github.com/EmilDohne/PhotoshopAPI/issues/141.
+		generate_channel_image_data_from_read(channelImageData, layerRecord.m_ChannelInformation);
 		if (!layerRecord.m_AdditionalLayerInfo.has_value())
 		{
 			return;
@@ -567,7 +578,16 @@ private:
 	std::vector<std::shared_ptr<TaggedBlock>> generate_tagged_blocks() override
 	{
 		auto blocks = Layer<T>::generate_tagged_blocks();
-		blocks.insert(blocks.end(), m_TypeToolBlocks.begin(), m_TypeToolBlocks.end());
+		// Emit the TySh TypeToolBlock(s) at the FRONT of the per-layer additional-info
+		// sequence, not the end. Procreate's strict type-layer parser walks the
+		// per-layer additional info and gates type-layer restoration on TySh appearing
+		// before the other Photoshop-canonical blocks (verified empirically via a
+		// byte-level bisection: moving JUST TySh to position 0 in a PA round-trip is
+		// sufficient to restore live editable type layers in Procreate). The pre-fix
+		// `blocks.end()` emission matched Photoshop on macOS — which is order-agnostic —
+		// but produced rasterised layers on Procreate import. Photoshop-saved sources
+		// always emit TySh first; this brings PA into line.
+		blocks.insert(blocks.begin(), m_TypeToolBlocks.begin(), m_TypeToolBlocks.end());
 		return blocks;
 	}
 
