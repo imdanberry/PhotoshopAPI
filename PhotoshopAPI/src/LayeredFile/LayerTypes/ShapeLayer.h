@@ -42,6 +42,38 @@ struct ShapeLayer : Layer<T>
 		}
 	}
 
+
+	// Returns true when m_UnparsedImageData contains channels at indices 0, 1,
+	// and 2 (Red/Green/Blue for RGB documents). Shape layers written by
+	// Photoshop carry a full baked raster of the shape's appearance (fill,
+	// stroke, anti-aliasing) in these channels; shape layers from writers
+	// that omit the baked raster return false.
+	bool has_colour_channels() const noexcept
+	{
+		bool has0 = false, has1 = false, has2 = false;
+		for (const auto& [id, ch] : Layer<T>::m_UnparsedImageData) {
+			if (id.index == 0)  has0 = true;
+			if (id.index == 1)  has1 = true;
+			if (id.index == 2)  has2 = true;
+		}
+		return has0 && has1 && has2;
+	}
+
+	// Returns decompressed pixel data for the channel at `index` (0=R, 1=G,
+	// 2=B, -1=α in RGB documents). Returns empty if the channel is absent.
+	// Does NOT consume the stored channel — compressed data remains intact
+	// for the roundtrip write path (generate_channel_image_data).
+	std::vector<T> get_retained_channel(int index) const
+	{
+		for (const auto& [id, ch] : Layer<T>::m_UnparsedImageData) {
+			if (id.index == static_cast<int16_t>(index) && ch) {
+				try { return ch->template get_data<T>(); }
+				catch (...) { return {}; }
+			}
+		}
+		return {};
+	}
+
 	std::tuple<LayerRecord, ChannelImageData> to_photoshop() override
 	{
 		PascalString name = Layer<T>::generate_name();
