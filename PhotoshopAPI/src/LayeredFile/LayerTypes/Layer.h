@@ -23,6 +23,8 @@
 #include <optional>
 #include <string>
 #include <memory>
+#include <span>
+#include <utility>
 
 #include "Core/TaggedBlocks/SheetColorTaggedBlock.h"
 
@@ -193,6 +195,80 @@ struct Layer : public MaskMixin<T>
 	/// The color mode with which the file was created, only stored to
 	/// allow better detection during channel access for e.g. image layers
 	Enum::ColorMode color_mode() const noexcept { return m_ColorMode; }
+
+	/// Set the layer's colour mode (flatter patch). Channel setters validate
+	/// against and key by this value, so an in-place document colour-mode
+	/// conversion (CMYK/Grayscale → RGB) must flip it on every layer before
+	/// setting RGB channel data. Does not touch any stored channel bytes.
+	void color_mode(Enum::ColorMode _color_mode) noexcept { m_ColorMode = _color_mode; }
+
+	/// Channel indices retained in m_UnparsedImageData (flatter patch).
+	///
+	/// Layer types without a parsed-channel representation (text, fill /
+	/// adjustment, shape) park their raster channels here on read and re-emit
+	/// them verbatim on write. Colour indices are 0-based per the document
+	/// colour mode (CMYK: 0=C 1=M 2=Y 3=K); -1 is the transparency alpha.
+	/// Empty for parsed-channel layer types (image layers) and channel-less
+	/// layers (groups, mask-only adjustments).
+	std::vector<int16_t> unparsed_channel_indices() const
+	{
+		std::vector<int16_t> indices;
+		indices.reserve(m_UnparsedImageData.size());
+		for (const auto& [id, ch] : m_UnparsedImageData)
+		{
+			indices.push_back(id.index);
+		}
+		return indices;
+	}
+
+	/// Decompressed pixel data for the retained channel at `index` (flatter
+	/// patch). Returns empty if the channel is absent or decompression fails.
+	/// Non-consuming — the compressed copy stays intact for the roundtrip
+	/// write path.
+	std::vector<T> get_unparsed_channel(int16_t index) const
+	{
+		for (const auto& [id, ch] : m_UnparsedImageData)
+		{
+			if (id.index == index && ch)
+			{
+				try { return ch->template get_data<T>(); }
+				catch (...) { return {}; }
+			}
+		}
+		return {};
+	}
+
+	/// Replace all retained channels in m_UnparsedImageData (flatter patch).
+	///
+	/// Used by in-place document colour-mode conversion to swap a layer's
+	/// CMYK/Gray planes for converted RGB ones. `channels` supplies the full
+	/// replacement set (id-info → raw pixel data sized m_Width × m_Height);
+	/// every previously retained channel is dropped. Geometry is taken from
+	/// the layer's own extents, matching how the channels were read. Channels
+	/// whose data size doesn't match the layer extents are skipped.
+	void set_unparsed_channels(
+		const std::vector<std::pair<Enum::ChannelIDInfo, std::vector<T>>>& channels,
+		Enum::Compression compression)
+	{
+		const size_t expected = static_cast<size_t>(m_Width) * static_cast<size_t>(m_Height);
+		m_UnparsedImageData.clear();
+		for (const auto& [id, data] : channels)
+		{
+			if (data.size() != expected)
+			{
+				continue;
+			}
+			m_UnparsedImageData[id] = std::make_unique<channel_wrapper>(
+				compression,
+				std::span<const T>(data.begin(), data.end()),
+				id,
+				m_Width,
+				m_Height,
+				m_CenterX,
+				m_CenterY
+			);
+		}
+	}
 
 	/// The layers' display color in the GUI.
 	Enum::LayerColor display_color() const noexcept { return m_LayerColor; }
