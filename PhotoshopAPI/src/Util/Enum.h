@@ -823,12 +823,18 @@ namespace Enum
 		vecMaskSettings,	// 'vsms' for CS6 and up. We dont support the legacy 'vmsk' option here
 		vecStrokeData,
 		vecStrokeContentData,
-		contentGeneratorExtraData
+		contentGeneratorExtraData,
+		// Flatter: application-private session payload carried in the global
+		// additional layer info. Appended last so every pre-existing enumerator
+		// keeps its value. Registering the key is what makes the base TaggedBlock
+		// pass-through retain it on read and emit it on write.
+		fltSession
 	};
 
 	namespace {
 		inline std::unordered_map<std::string, TaggedBlockKey> taggedBlockMap
 		{
+			{"fLaT", TaggedBlockKey::fltSession},
 			{"SoCo", TaggedBlockKey::adjSolidColor},
 			{"GdFl", TaggedBlockKey::adjGradient},
 			{"PtFl", TaggedBlockKey::adjPattern},

@@ -151,6 +151,30 @@ struct LayeredFile
 	/// purposes.
 	std::vector<std::shared_ptr<TaggedBlock>> unparsed_blocks() const noexcept { return m_UnparsedBlocks; }
 
+	/// Primarily for internal use or advanced users.
+	///
+	/// Append a tagged block to the document-level additional layer info.
+	/// The getter above returns a copy, so there was previously no way to add
+	/// one from outside the library.
+	void add_unparsed_block(std::shared_ptr<TaggedBlock> block)
+	{
+		m_UnparsedBlocks.push_back(std::move(block));
+	}
+
+	/// Drop every document-level unparsed block whose key matches, returning
+	/// how many were removed. Lets a writer replace its own payload rather
+	/// than accumulate a copy per save.
+	size_t remove_unparsed_blocks(Enum::TaggedBlockKey key)
+	{
+		const auto before = m_UnparsedBlocks.size();
+		m_UnparsedBlocks.erase(
+			std::remove_if(
+				m_UnparsedBlocks.begin(), m_UnparsedBlocks.end(),
+				[key](const std::shared_ptr<TaggedBlock>& b) { return b && b->getKey() == key; }),
+			m_UnparsedBlocks.end());
+		return before - m_UnparsedBlocks.size();
+	}
+
 	LayeredFile() = default;
 
 	/// \brief Constructs a LayeredFile instance from a Photoshop file.

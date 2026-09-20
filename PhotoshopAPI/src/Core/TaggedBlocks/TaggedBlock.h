@@ -31,6 +31,15 @@ struct TaggedBlock
 	virtual ~TaggedBlock() = default;
 	TaggedBlock() = default;
 
+	/// Construct a pass-through block from a registered key and its raw bytes.
+	/// Needed because m_Key is protected: without it no caller outside the
+	/// library can author a block that write() will emit a key for.
+	TaggedBlock(Enum::TaggedBlockKey key, std::vector<std::byte> data)
+		: m_Data(std::move(data)), m_Key(key)
+	{
+		m_Length = static_cast<uint32_t>(m_Data.size());
+	}
+
 	// Read a TaggedBlock from a file
 	void read(File& document, const FileHeader& header, const uint64_t offset, const Signature signature, const Enum::TaggedBlockKey key, const uint16_t padding = 1u);
 	virtual void write(File& document, [[maybe_unused]] const FileHeader& header, [[maybe_unused]] ProgressCallback& callback, [[maybe_unused]] const uint16_t padding = 1u);
