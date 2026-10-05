@@ -16,6 +16,47 @@
 
 #include <cstring>
 #include <inttypes.h>
+#include <exception>
+#include <mutex>
+
+
+PSAPI_NAMESPACE_BEGIN
+
+namespace RLE_Impl
+{
+    // Validate a single PackBits run before executing it. Corrupt or truncated channel data must raise an error here:
+    // without this check a run can read past the end of the compressed span or write past the end of the
+    // decompressed buffer, corrupting memory rather than failing.
+    // ---------------------------------------------------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------------------------------------------------
+    inline void ValidatePackBitsRun(const uint64_t inputEnd, const uint64_t inputSize, const uint64_t outputEnd, const uint64_t outputSize)
+    {
+        if (inputEnd > inputSize)
+        {
+            PSAPI_LOG_ERROR("DecompressPackBits", "PackBits run reads past the end of the compressed data, needs %" PRIu64 " bytes but only %" PRIu64 " are present",
+                inputEnd, inputSize);
+        }
+        if (outputEnd > outputSize)
+        {
+            PSAPI_LOG_ERROR("DecompressPackBits", "PackBits run writes past the end of the decompressed data, needs %" PRIu64 " bytes but the buffer holds %" PRIu64,
+                outputEnd, outputSize);
+        }
+    }
+
+    // A PackBits stream must decompress to exactly the expected size. A short stream is malformed data, not padding.
+    // ---------------------------------------------------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------------------------------------------------
+    inline void ValidatePackBitsOutput(const uint64_t written, const uint64_t expected)
+    {
+        if (written != expected)
+        {
+            PSAPI_LOG_ERROR("DecompressPackBits", "PackBits data decompressed to %" PRIu64 " bytes but %" PRIu64 " were expected",
+                written, expected);
+        }
+    }
+}
+
+PSAPI_NAMESPACE_END
 
 
 #ifdef __AVX2__
@@ -59,6 +100,7 @@ namespace RLE_Impl
             else if (value > 128)
             {
                 // Repeat the next byte after this 257-n times
+                ValidatePackBitsRun(i + 2, dataSize, idx + (257u - value), decompressedData.size());
                 const uint8_t repeat_val = compressedData[i + 1];
                 for (int j = 0; j <= 256 - value; ++j)
                 {
@@ -70,6 +112,7 @@ namespace RLE_Impl
             else
             {
                 // Header byte indicates the next n bytes are to be read as values
+                ValidatePackBitsRun(i + value + 2, dataSize, idx + value + 1u, decompressedData.size());
                 for (int j = 0; j <= value; ++j)
                 {
                     decompressedData[idx] = compressedData[i + j + 1];
@@ -79,6 +122,7 @@ namespace RLE_Impl
             }
             ++i;
         }
+        ValidatePackBitsOutput(idx, decompressedData.size());
 
         return decompressedData;
     }
@@ -107,6 +151,7 @@ namespace RLE_Impl
             else if (value > 128)
             {
                 // Repeat the next byte after this 257-n times
+                ValidatePackBitsRun(i + 2, dataSize, idx + (257u - value), decompressedData.size());
                 const uint8_t repeat_val = compressedData[i + 1];
                 for (int j = 0; j <= 256 - value; ++j)
                 {
@@ -118,6 +163,7 @@ namespace RLE_Impl
             else
             {
                 // Header byte indicates the next n bytes are to be read as values
+                ValidatePackBitsRun(i + value + 2, dataSize, idx + value + 1u, decompressedData.size());
                 for (int j = 0; j <= value; ++j)
                 {
                     decompressedData[idx] = compressedData[i + j + 1];
@@ -127,6 +173,7 @@ namespace RLE_Impl
             }
             ++i;
         }
+        ValidatePackBitsOutput(idx, decompressedData.size());
     }
 
 }
@@ -208,15 +255,33 @@ void DecompressRLE(ByteStream& stream, std::span<T> buffer, uint64_t offset, con
     }
     {
         PSAPI_PROFILE_SCOPE("DecompressPackBits");
-        // Decompress using the PackBits algorithm
+        // Decompress using the PackBits algorithm. An exception escaping a std::execution::par callable calls
+        // std::terminate, so the first error is captured here and rethrown once the loop has finished.
+        std::exception_ptr firstError = nullptr;
+        std::mutex errorMutex;
         std::for_each(std::execution::par, verticalIter.begin(), verticalIter.end(), [&](auto index)
             {
+                try
+                {
 #ifdef __AVX2__
-                RLE_Impl::DecompressPackBitsAVX2<T>(compressedDataSpans[index], decompressedDataSpans[index]);
+                    RLE_Impl::DecompressPackBitsAVX2<T>(compressedDataSpans[index], decompressedDataSpans[index]);
 #else
-                RLE_Impl::DecompressPackBits<T>(compressedDataSpans[index], decompressedDataSpans[index]);
+                    RLE_Impl::DecompressPackBits<T>(compressedDataSpans[index], decompressedDataSpans[index]);
 #endif
+                }
+                catch (...)
+                {
+                    std::lock_guard<std::mutex> lock(errorMutex);
+                    if (!firstError)
+                    {
+                        firstError = std::current_exception();
+                    }
+                }
             });
+        if (firstError)
+        {
+            std::rethrow_exception(firstError);
+        }
     }
     // Convert decompressed data to native endianness in-place
     endianDecodeBEArray(buffer);

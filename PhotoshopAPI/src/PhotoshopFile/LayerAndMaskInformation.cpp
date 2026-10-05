@@ -18,6 +18,8 @@
 #include <variant>
 #include <algorithm>
 #include <execution>
+#include <exception>
+#include <mutex>
 #include <limits>
 
 #define __STDC_FORMAT_MACROS 1
@@ -1026,30 +1028,49 @@ void LayerInfo::read(File& document, const FileHeader& header, ProgressCallback&
 		channelImageDataSizes.push_back(imageDataSize);
 	}
 
-	// Read the Channel Image Instances
+	// Read the Channel Image Instances. An exception escaping a std::execution::par callable calls std::terminate,
+	// so corrupt or truncated channel data would take the host process down. Capture the first error instead and
+	// rethrow it once every layer has finished.
 	std::vector<ChannelImageData> localResults(m_LayerRecords.size());
+	std::exception_ptr firstError = nullptr;
+	std::mutex errorMutex;
 	std::for_each(std::execution::par, m_LayerRecords.begin(), m_LayerRecords.end(), [&](const LayerRecord& layerRecord)
 	{
-		callback.setTask("Reading Layer: " + std::string(layerRecord.m_LayerName.getString()));
-		size_t index = &layerRecord - &m_LayerRecords[0];
+		try
+		{
+			callback.setTask("Reading Layer: " + std::string(layerRecord.m_LayerName.getString()));
+			size_t index = &layerRecord - &m_LayerRecords[0];
 
-		uint64_t tmpOffset = channelImageDataOffsets[index];
-		uint64_t tmpSize = channelImageDataSizes[index];
+			uint64_t tmpOffset = channelImageDataOffsets[index];
+			uint64_t tmpSize = channelImageDataSizes[index];
 
-		// Read the binary data. Note that this is done in one step to avoid the offset being set differently before 
-		// reading the data. We also do this within the loop to avoid allocating all the memory at once
-		ByteStream stream(document, tmpOffset, tmpSize);
+			// Read the binary data. Note that this is done in one step to avoid the offset being set differently before 
+			// reading the data. We also do this within the loop to avoid allocating all the memory at once
+			ByteStream stream(document, tmpOffset, tmpSize);
 
-		// Create the ChannelImageData by parsing the given buffer
-		auto result = ChannelImageData();
-		result.read(stream, header, tmpOffset, layerRecord);
+			// Create the ChannelImageData by parsing the given buffer
+			auto result = ChannelImageData();
+			result.read(stream, header, tmpOffset, layerRecord);
 
-		// As each index is unique we do not need to worry about locking here
-		localResults[index] = std::move(result);
-		// Increment the callback
-		callback.setTask("Read Layer: " + std::string(layerRecord.m_LayerName.getString()));
-		callback.increment();
+			// As each index is unique we do not need to worry about locking here
+			localResults[index] = std::move(result);
+			// Increment the callback
+			callback.setTask("Read Layer: " + std::string(layerRecord.m_LayerName.getString()));
+			callback.increment();
+		}
+		catch (...)
+		{
+			std::lock_guard<std::mutex> lock(errorMutex);
+			if (!firstError)
+			{
+				firstError = std::current_exception();
+			}
+		}
 	});
+	if (firstError)
+	{
+		std::rethrow_exception(firstError);
+	}
 	// Combine results after the loop
 	m_ChannelImageData.insert(m_ChannelImageData.end(), std::make_move_iterator(localResults.begin()), std::make_move_iterator(localResults.end()));
 

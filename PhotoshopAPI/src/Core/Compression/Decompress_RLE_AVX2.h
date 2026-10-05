@@ -1,6 +1,7 @@
 /*
 This header is not meant to be directly included since we at compile time include or skip this header in Decompress_RLE.h depending on if we 
 detect AVX2 SIMD intrinsics. Including this header in your project will lead to breaking compatibility with non-avx2 platforms.
+It relies on RLE_Impl::ValidatePackBitsRun / ValidatePackBitsOutput, which Decompress_RLE.h defines before including it.
 */
 
 #pragma once
@@ -42,6 +43,7 @@ namespace RLE_Impl
             else if (value > 128)
             {
                 // Repeat the next byte after this n times
+                ValidatePackBitsRun(i + 2, dataSize, idx + (257u - value), decompressedData.size());
                 const uint8_t repeatValue = compressedData[i + 1];
                 __m256i ymmValue = _mm256_set1_epi8(repeatValue);
 
@@ -63,6 +65,7 @@ namespace RLE_Impl
             }
             else
             {
+                ValidatePackBitsRun(i + value + 2, dataSize, idx + value + 1u, decompressedData.size());
                 uint8_t remaining = value + 1;
                 uint8_t read_offset = 0;
                 // Header byte indicates the next n bytes are to be read as values
@@ -82,6 +85,7 @@ namespace RLE_Impl
             }
             ++i;
         }
+        ValidatePackBitsOutput(idx, decompressedData.size());
     }
 
 
@@ -108,6 +112,7 @@ namespace RLE_Impl
             else if (value > 128)
             {
                 // Repeat the next byte after this n times
+                ValidatePackBitsRun(i + 2, dataSize, idx + (257u - value), decompressedData.size());
                 const uint8_t repeatValue = compressedData[i + 1];
                 __m256i ymmValue = _mm256_set1_epi8(repeatValue);
 
@@ -129,6 +134,7 @@ namespace RLE_Impl
             }
             else
             {
+                ValidatePackBitsRun(i + value + 2, dataSize, idx + value + 1u, decompressedData.size());
                 uint8_t remaining = value + 1;
                 uint8_t read_offset = 0;
                 // Header byte indicates the next n bytes are to be read as values
@@ -148,6 +154,7 @@ namespace RLE_Impl
             }
             ++i;
         }
+        ValidatePackBitsOutput(idx, decompressedData.size());
 
         return decompressedData;
     }

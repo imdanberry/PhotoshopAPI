@@ -15,6 +15,8 @@
 #include <vector>
 #include <cstring>
 #include <bit>
+#include <memory>
+#include <inttypes.h>
 
 
 // If we compile with C++<20 we replace the stdlib implementation with the compatibility
@@ -40,7 +42,16 @@ namespace ZIP_Impl
 	{
 		PSAPI_PROFILE_FUNCTION();
 
-		libdeflate_decompressor* decompressor = libdeflate_alloc_decompressor();
+		if (buffer.size() < decompressedSize)
+		{
+			PSAPI_LOG_ERROR("UnZip", "Provided buffer is not large enough. Expected at least: %" PRIu64 " but got %zu instead",
+				decompressedSize, buffer.size());
+		}
+
+		// Owned by a unique_ptr so the decompressor is freed on the error paths below, which throw.
+		std::unique_ptr<libdeflate_decompressor, decltype(&libdeflate_free_decompressor)> decompressorOwner(
+			libdeflate_alloc_decompressor(), &libdeflate_free_decompressor);
+		libdeflate_decompressor* decompressor = decompressorOwner.get();
 		if (!decompressor) {
 			PSAPI_LOG_ERROR("UnZip", "Cannot allocate decompressor");
 		}
@@ -66,8 +77,6 @@ namespace ZIP_Impl
 		{
 			PSAPI_LOG_ERROR("UnZip", "Inflate decompression failed due to having insufficient output space.");
 		}
-
-		libdeflate_free_decompressor(decompressor);
 	}
 
 
