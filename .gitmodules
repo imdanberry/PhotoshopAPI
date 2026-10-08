@@ -15,4 +15,4 @@
 	url = https://github.com/microsoft/vcpkg
 [submodule "thirdparty/compressed-image"]
 	path = thirdparty/compressed-image
-	url = https://github.com/EmilDohne/compressed-image
+	url = https://github.com/imdanberry/compressed-image
