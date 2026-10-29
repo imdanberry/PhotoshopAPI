@@ -1038,6 +1038,8 @@ void LayerInfo::read(File& document, const FileHeader& header, ProgressCallback&
 	{
 		try
 		{
+			// Captured below with any other error, so a cancel unwinds after the loop.
+			callback.throwIfCancelled();
 			callback.setTask("Reading Layer: " + std::string(layerRecord.m_LayerName.getString()));
 			size_t index = &layerRecord - &m_LayerRecords[0];
 
@@ -1151,47 +1153,69 @@ void LayerInfo::write(File& document, const FileHeader& header, ProgressCallback
 	// but we do not bother with that at this point
 	WriteBinaryData(document, static_cast<int16_t>(m_LayerRecords.size()));
 
-	// Loop over the individual layers and compress them while also storing the channel information
+	// Loop over the individual layers and compress them while also storing the channel information. An exception
+	// escaping a std::execution::par callable calls std::terminate, so capture the first error (a cancel included)
+	// and rethrow it once every layer has finished, as the read loop does.
+	std::exception_ptr firstError = nullptr;
+	std::mutex errorMutex;
 	std::for_each(std::execution::par, m_ChannelImageData.begin(), m_ChannelImageData.end(),
 		[&](ChannelImageData& channel)
 		{
-			// Get a unique index for each of the layers to compress them in random order
-			const size_t index = &channel - &m_ChannelImageData[0];
-			callback.setTask("Compressing Layer: " + std::string(m_LayerRecords[index].m_LayerName.getString()));
-			std::vector<LayerRecords::ChannelInformation> lrChannelInfo;
-			std::vector<Enum::Compression> lrCompression;
+			try
+			{
+				callback.throwIfCancelled();
+				// Get a unique index for each of the layers to compress them in random order
+				const size_t index = &channel - &m_ChannelImageData[0];
+				callback.setTask("Compressing Layer: " + std::string(m_LayerRecords[index].m_LayerName.getString()));
+				std::vector<LayerRecords::ChannelInformation> lrChannelInfo;
+				std::vector<Enum::Compression> lrCompression;
 
-			if (header.m_Depth == Enum::BitDepth::BD_8)
-			{
-				compressedData[index] = channel.compressData<uint8_t>(header, lrChannelInfo, lrCompression);
+				if (header.m_Depth == Enum::BitDepth::BD_8)
+				{
+					compressedData[index] = channel.compressData<uint8_t>(header, lrChannelInfo, lrCompression);
+				}
+				else if (header.m_Depth == Enum::BitDepth::BD_16)
+				{
+					compressedData[index] = channel.compressData<uint16_t>(header, lrChannelInfo, lrCompression);
+				}
+				else if (header.m_Depth == Enum::BitDepth::BD_32)
+				{
+					compressedData[index] = channel.compressData<float32_t>(header, lrChannelInfo, lrCompression);
+				}
+				else
+				{
+					PSAPI_LOG_ERROR("LayerInfo", "Unsupported BitDepth encountered, currently only 8-, 16- and 32-bit files are supported");
+				}
+				channelInfos[index] = lrChannelInfo;
+				channelCompression[index] = lrCompression;
+				callback.setTask("Compressed Layer: " + std::string(m_LayerRecords[index].m_LayerName.getString()));
+				callback.increment();
 			}
-			else if (header.m_Depth == Enum::BitDepth::BD_16)
+			catch (...)
 			{
-				compressedData[index] = channel.compressData<uint16_t>(header, lrChannelInfo, lrCompression);
+				std::lock_guard<std::mutex> lock(errorMutex);
+				if (!firstError)
+				{
+					firstError = std::current_exception();
+				}
 			}
-			else if (header.m_Depth == Enum::BitDepth::BD_32)
-			{
-				compressedData[index] = channel.compressData<float32_t>(header, lrChannelInfo, lrCompression);
-			}
-			else
-			{
-				PSAPI_LOG_ERROR("LayerInfo", "Unsupported BitDepth encountered, currently only 8-, 16- and 32-bit files are supported");
-			}
-			channelInfos[index] = lrChannelInfo;
-			channelCompression[index] = lrCompression;
-			callback.setTask("Compressed Layer: " + std::string(m_LayerRecords[index].m_LayerName.getString()));
-			callback.increment();
 		});
+	if (firstError)
+	{
+		std::rethrow_exception(firstError);
+	}
 
 	// Write the layer records
 	for (int i = 0; i < m_LayerRecords.size(); ++i)
 	{
+		callback.throwIfCancelled();
 		m_LayerRecords[i].write(document, header, callback, channelInfos[i]);
 	}
 
 	// Write the ChannelImageData to disk, 
 	for (int i = 0; i < compressedData.size(); ++i)
 	{
+		callback.throwIfCancelled();
 		callback.setTask("Writing Layer: " + std::string(m_LayerRecords[i].m_LayerName.getString()));
 		m_ChannelImageData[i].write(document, compressedData[i], channelCompression[i]);
 		callback.increment();

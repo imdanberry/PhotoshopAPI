@@ -4,8 +4,18 @@
 
 #include <string>
 #include <mutex>
+#include <functional>
+#include <stdexcept>
 
 PSAPI_NAMESPACE_BEGIN
+
+
+/// Thrown at a check point when the attached ProgressCallback's `isCancelled` reports true
+/// (flatter-patches). Raised only at layer granularity, never from inside a nested parallel loop.
+struct OperationCancelled : std::runtime_error
+{
+	OperationCancelled() : std::runtime_error("PhotoshopAPI: operation cancelled") {}
+};
 
 
 /// A simple callback which can be attached to some of the most common read/write operations to query the status of the operation
@@ -50,12 +60,36 @@ struct ProgressCallback
 	// This function is thread-safe
 	inline void increment() noexcept 
 	{
-		std::lock_guard<std::mutex> guard(m_Mutex);
-		if (m_Count + 1 <= m_Max)
-			++m_Count;
-		else
-			PSAPI_LOG_WARNING("Progress", "Incrementing the counter would exceed the maximum value of %zu, ignoring this increment", m_Max);
+		size_t count = 0;
+		size_t max = 0;
+		{
+			std::lock_guard<std::mutex> guard(m_Mutex);
+			if (m_Count + 1 <= m_Max)
+				++m_Count;
+			else
+				PSAPI_LOG_WARNING("Progress", "Incrementing the counter would exceed the maximum value of %zu, ignoring this increment", m_Max);
+			count = m_Count;
+			max = m_Max;
+		}
+		// Outside the lock so the observer may itself query the callback.
+		if (onIncrement)
+			onIncrement(count, max);
 	}
+
+	/// Optional observer, called after every increment with the new count and max (flatter-patches).
+	/// It is called from worker threads, concurrently, and must not throw.
+	std::function<void(size_t count, size_t max)> onIncrement;
+
+	/// Optional cancellation query, checked once per layer by the read and write loops (flatter-patches).
+	/// It is called from worker threads, concurrently, and must not throw.
+	std::function<bool()> isCancelled;
+
+	/// Whether `isCancelled` is set and reports true.
+	inline bool cancelled() const { return isCancelled && isCancelled(); }
+
+	/// Throw OperationCancelled if `cancelled()`. Only to be called where a throw is safe: outside
+	/// any std::execution::par callable, or inside one whose exceptions are captured and rethrown.
+	inline void throwIfCancelled() const { if (cancelled()) throw OperationCancelled(); }
 
 	// Reset the internal counter back to 0. This is called by the code 
 	// executing the long operation, not the user itself

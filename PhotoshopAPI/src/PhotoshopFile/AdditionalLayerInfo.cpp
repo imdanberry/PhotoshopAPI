@@ -24,6 +24,11 @@ void AdditionalLayerInfo::read(File& document, const FileHeader& header, Progres
 		{
 			const std::shared_ptr<TaggedBlock> taggedBlock = m_TaggedBlocks.readTaggedBlock(document, header, callback, padding);
 		}
+		catch (const OperationCancelled&)
+		{
+			// A cancel inside an Lr16 / Lr32 block's layer data is not an unknown block (flatter-patches).
+			throw;
+		}
 		catch (...)
 		{
 			PSAPI_LOG_WARNING("AdditionalLayerInfo", "Unknown tagged block encountered. Skipping it.");

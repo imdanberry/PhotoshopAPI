@@ -25,6 +25,7 @@ void PhotoshopFile::read(File& document, ProgressCallback& callback)
 	m_ColorModeData.read(document);
 	m_ImageResources.read(document, m_ColorModeData.offset() + m_ColorModeData.size());
 
+	callback.throwIfCancelled();
 	m_LayerMaskInfo.read(document, m_Header, callback, m_ImageResources.offset() + m_ImageResources.size());
 }
 
@@ -42,7 +43,9 @@ void PhotoshopFile::write(File& document, ProgressCallback& callback)
 	m_ColorModeData.write(document, m_Header);
 	m_ImageResources.write(document);
 
+	callback.throwIfCancelled();
 	m_LayerMaskInfo.write(document, m_Header, callback);
+	callback.throwIfCancelled();
 	// This unfortunately appears to be required which inflates files by quite a bit
 	// but still significantly less than photoshop itself
 	callback.setTask("Writing ImageData section");
